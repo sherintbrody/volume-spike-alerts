@@ -191,7 +191,13 @@ def run_volume_check():
             all_spikes.extend(spikes)
             for spike in spikes:
                 print(f"    ⚡ SPIKE: {spike['time']} - Volume {spike['volume']:,} (×{spike['multiplier']:.2f})")
-    
+    if __name__ == "__main__":
+        run_volume_check()
+
+    # --- TEST ALERT ---
+        print("📡 Sending test alert to Telegram...")
+        send_telegram_alert("⚡ *TEST ALERT* ⚡\n\nThis is a manual test message from your volume spike script.")
+
     if all_spikes:
         print(f"\n⚡ Total spikes found: {len(all_spikes)}")
         alert_messages = []
