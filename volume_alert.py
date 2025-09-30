@@ -1,12 +1,10 @@
 import requests
-import json
 import os
 from datetime import datetime, timedelta, time
 import pytz
 from collections import defaultdict
 
 # ====== CONFIG ======
-# Get from GitHub Secrets
 API_KEY = os.environ.get("OANDA_API_KEY")
 ACCOUNT_ID = os.environ.get("OANDA_ACCOUNT_ID")
 BASE_URL = "https://api-fxpractice.oanda.com/v3"
@@ -21,29 +19,18 @@ INSTRUMENTS = {
     "US30": "US30_USD"
 }
 
-# Fixed Configuration
 SELECTED_INSTRUMENTS = ["XAUUSD", "NAS100", "US30"]
-BUCKET_MINUTES = 60  # 1 hour bucket
+BUCKET_MINUTES = 60
 ENABLE_TELEGRAM_ALERTS = True
 SKIP_WEEKENDS = True
-THRESHOLD_MULTIPLIER = 0.1
-GRANULARITY = "M15"  # 15 minutes
+THRESHOLD_MULTIPLIER = 0.1   # lowered for testing
+GRANULARITY = "M15"
 
 IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.utc
 headers = {"Authorization": f"Bearer {API_KEY}"}
 
-# Number of trading days to use for averaging
 TRADING_DAYS_FOR_AVERAGE = 21
-
-# ====== ALERT MEMORY (GitHub Actions) ======
-def load_alerted_candles():
-    """For GitHub Actions, we can't persist files between runs"""
-    return set()
-
-def save_alerted_candles(alerted_set):
-    """For GitHub Actions, we skip saving"""
-    pass
 
 # ====== TELEGRAM ALERT ======
 def send_telegram_alert(message):
@@ -89,14 +76,12 @@ def fetch_candles(instrument_code, from_time, to_time):
 
 # ====== UTILITIES ======
 def get_time_bucket(dt_ist):
-    """Calculate 1-hour time bucket"""
     bucket_start_minute = (dt_ist.minute // BUCKET_MINUTES) * BUCKET_MINUTES
     bucket_start = dt_ist.replace(minute=bucket_start_minute, second=0, microsecond=0)
     bucket_end = bucket_start + timedelta(minutes=BUCKET_MINUTES)
     return f"{bucket_start.strftime('%I:%M %p')}–{bucket_end.strftime('%I:%M %p')}"
 
 def is_weekend(date):
-    """Check if a date is Saturday (5) or Sunday (6)"""
     return date.weekday() in [5, 6]
 
 def get_sentiment(candle):
@@ -105,7 +90,6 @@ def get_sentiment(candle):
     return "🟩" if c > o else "🟥" if c < o else "▪️"
 
 def compute_bucket_averages(code):
-    """Compute average volumes for each time bucket"""
     bucket_volumes = defaultdict(list)
     today_ist = datetime.now(IST).date()
     now_utc = datetime.now(UTC)
@@ -131,7 +115,6 @@ def compute_bucket_averages(code):
         
         if candles:
             trading_days_collected += 1
-            
             for c in candles:
                 if not c.get("complete", True):
                     continue
@@ -149,24 +132,21 @@ def compute_bucket_averages(code):
 
 # ====== CORE PROCESS ======
 def check_recent_spikes(name, code):
-    """Check only the most recent candles for spikes"""
     bucket_avg = compute_bucket_averages(code)
     now_utc = datetime.now(UTC)
     
-    # Get last 3 candles only (45 minutes)
     from_time = now_utc - timedelta(minutes=45)
-    
     candles = fetch_candles(code, from_time, now_utc)
+    print(f"Fetched {len(candles)} candles for {name}")
+    
     if not candles:
         return []
     
     spike_alerts = []
     
     for c in candles:
-        # Skip incomplete candles
         if not c.get("complete", True):
             continue
-            
         try:
             t_utc = datetime.strptime(c["time"], "%Y-%m-%dT%H:%M:%S.%f000Z")
         except ValueError:
@@ -174,10 +154,11 @@ def check_recent_spikes(name, code):
         t_ist = t_utc.replace(tzinfo=UTC).astimezone(IST)
         
         bucket = get_time_bucket(t_ist)
-        
         vol = c["volume"]
         avg = bucket_avg.get(bucket, 0)
         threshold = avg * THRESHOLD_MULTIPLIER if avg else 0
+        
+        print(f"  Candle {t_ist} | Vol={vol} | Avg={avg} | Threshold={threshold}")
         
         if threshold > 0 and vol > threshold:
             spike_diff = vol - int(threshold)
@@ -200,24 +181,19 @@ def check_recent_spikes(name, code):
 # ====== MAIN EXECUTION ======
 def run_volume_check():
     all_spikes = []
-    
     print(f"\n[{datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')}] Checking volume spikes...")
     
     for name in SELECTED_INSTRUMENTS:
         code = INSTRUMENTS[name]
         print(f"  Checking {name}...")
-        
         spikes = check_recent_spikes(name, code)
         if spikes:
             all_spikes.extend(spikes)
             for spike in spikes:
                 print(f"    ⚡ SPIKE: {spike['time']} - Volume {spike['volume']:,} (×{spike['multiplier']:.2f})")
     
-    # Send consolidated alert
     if all_spikes:
         print(f"\n⚡ Total spikes found: {len(all_spikes)}")
-        
-        # Group by instrument
         alert_messages = []
         for spike in all_spikes:
             msg = (
@@ -230,11 +206,4 @@ def run_volume_check():
                 f"⏰ Bucket: {spike['bucket']}"
             )
             alert_messages.append(msg)
-        
-        full_alert = "⚡ *VOLUME SPIKE ALERT* ⚡\n\n" + "\n\n➖➖➖➖➖➖➖➖➖\n\n".join(alert_messages)
-        send_telegram_alert(full_alert)
-    else:
-        print("  ✓ No volume spikes detected")
-
-if __name__ == "__main__":
-    run_volume_check()
+        full_alert = "⚡ *VOLUME SPIKE ALERT* ⚡\n\n"
